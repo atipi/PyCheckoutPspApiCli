@@ -7,6 +7,9 @@ name = "pypi"
 
 [packages]
 
+requests = "*"
+six = "*"
+twine = "*"
 
 
 [dev-packages]

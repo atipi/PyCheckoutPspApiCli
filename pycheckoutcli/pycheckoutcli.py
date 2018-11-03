@@ -13,7 +13,11 @@ import requests
 import hmac
 import six
 
+from datetime import datetime
+
+
 class CheckoutCli(object):
+    _is_test_mode = 0
     _base_api_end_point = None
     _merchant_id = None
     _secret_key = None
@@ -25,11 +29,11 @@ class CheckoutCli(object):
     def __init__(self, is_test_mode=0, merchant_id=None, secret_key=None):
 
         logging.basicConfig(
-            #    filename="pakettikauppa.log",
-            #    format="%(asctime)s:%(levelname)s:%(message)s",
             level=logging.DEBUG,
         )
         self.set_logger()
+
+        self._is_test_mode = is_test_mode
 
         if is_test_mode == 1:
             self._base_api_end_point = 'https://api.checkout.fi'
@@ -85,6 +89,33 @@ class CheckoutCli(object):
 
         return post_url
 
+    def get_req_header_dict(self, api_type="Payment", method="POST", request_id=None, trans_id=None, \
+                            time_stamp_string=None):
+
+        if api_type not in self._accepted_api_type:
+            raise ValueError("Invalid value in api_type parameter")
+
+        if api_type == "PaymentDetails" or api_type == "Refund":
+            if trans_id is None:
+                raise KeyError("Missing data to trans_id parameter")
+
+        if time_stamp_string is None:
+            #TODO: must include timezone
+            time_stamp = datetime.now().strftime('%Y-%m-%dT%H%M%S')
+
+        header_dict = {
+            'checkout-account': self._merchant_id,
+            'checkout-algorithm': self._algorithm,
+            'checkout-method': method,
+            'checkout-nonce': request_id,
+            'checkout-timestamp': time_stamp,
+        }
+
+        if api_type == "PaymentDetails" or api_type == "Refund":
+            header_dict["checkout-transaction-id"] = trans_id
+
+        return header_dict
+
     def get_hash_sha256(self, **kwargs):
         """
         Calculate SHA256 digest string.
@@ -137,7 +168,7 @@ class CheckoutCli(object):
 
     def send_request(self, send_method='POST', _api_post_url=None, req_input=None, **headers):
         """
-        Send a request to Pakettikauppa.
+        Send a request to Checkout.
 
         :param send_method: type of request method. Possible value are 'POST' and 'GET', 'POST' is default value.
         :param _api_post_url: string of post URL
@@ -327,33 +358,120 @@ class CheckoutCli(object):
 
         return
 
-    def create_payment(self, **kwargs):
-        self.validate_create_payment_input(**kwargs)
+    def get_test_req_create_payment_data(self):
+        data = {
+            "stamp": 29858472952, # order id
+            "reference": 9187445,
+            "amount": 1590,
+            "currency": "EUR",
+            "language": "FI",
+            "items": [
+                {
+                    "unitPrice": 1590,
+                    "units": 1,
+                    "vatPercentage": 24,
+                    "productCode": "#927502759",
+                    "deliveryDate": "2018-03-07",
+                    "description": "Cat ladder",
+                    "category": "shoe",
+                    "merchant": 375917,
+                    "stamp": 29858472952,
+                    "reference": 9187445,
+                    "commission": {
+                        "merchant": "string",
+                        "amount": 0
+                    }
+                }
+            ],
+            "customer": {
+                "email": "john.doe@example.org",
+                "firstName": "John",
+                "lastName": "Doe",
+                "phone": 358501234567,
+                "vatId": "FI02454583"
+            },
+            "deliveryAddress": {
+                "streetAddress": "Fake street 123",
+                "postalCode": "00100",
+                "city": "Luleå",
+                "county": "Norrbotten",
+                "country": "Sweden"
+            },
+            "invoicingAddress": {
+                "streetAddress": "Fake street 123",
+                "postalCode": "00100",
+                "city": "Luleå",
+                "county": "Norrbotten",
+                "country": "Sweden"
+            },
+            "redirectUrls": {
+                "success": "https://ecom.example.org/success",
+                "cancel": "https://ecom.example.org/cancel"
+            },
+            "callbackUrls": {
+                "success": "https://ecom.example.org/success",
+                "cancel": "https://ecom.example.org/cancel"
+            }
+        }
+        return data
 
-        currency = kwargs["currency"]
+    def create_payment(self, request_id=None, input_data_dict=None, time_stamp_string=None):
+        if request_id is None:
+            raise KeyError("Missing unique request id value in request_id parameter")
+
+        if self._is_test_mode == 1:
+            if input_data_dict is None:
+                # get test data set
+                input_data_dict = self.get_test_req_create_payment_data()
+        else:
+            if input_data_dict is None:
+                raise KeyError("Missing input request parameters")
+
+        # Start input data validation
+        self.validate_create_payment_input(**input_data_dict)
+
+        currency = input_data_dict["currency"]
         if currency != "EUR":
             raise ValueError("Invalid currency value. Support only EUR.")
 
-        language = kwargs["language"]
+        language = input_data_dict["language"]
         self.validate_language_code2(language_code=language)
-        kwargs["language"].upper()
+        input_data_dict["language"].upper()
 
-        customer_dict = kwargs["customer"]
+        customer_dict = input_data_dict["customer"]
         if type(customer_dict) is dict:
             pass
         else:
             raise ValueError("Invalid data type for customer key")
 
-        self.validate_address_value_in_create_payment(data_dict=kwargs["invoicingAddress"])
+        self.validate_address_value_in_create_payment(data_dict=input_data_dict["invoicingAddress"])
 
-        self.validate_address_value_in_create_payment(data_dict=kwargs["deliveryAddress"])
+        self.validate_address_value_in_create_payment(data_dict=input_data_dict["deliveryAddress"])
 
-        self.validate_item_data_in_create_payment(data_dict=kwargs["items"])
+        self.validate_item_data_in_create_payment(data_dict=input_data_dict["items"])
 
-        self.validate_callback_urls_data(data_dict=kwargs["redirectUrls"])
+        self.validate_callback_urls_data(data_dict=input_data_dict["redirectUrls"])
 
-        self.validate_callback_urls_data(data_dict=kwargs["callbackUrls"])
+        self.validate_callback_urls_data(data_dict=input_data_dict["callbackUrls"])
 
         # Everything OK now can proceed sending data to Checkout
+        post_url = self.get_post_url(api_type="Payments")
 
-        return
+        headers_dict = self.get_req_header_dict(api_type="Payments", method="POST", request_id=request_id,\
+                                                time_stamp_string=time_stamp_string)
+
+        # Calculate HMAC
+        hmac_dict = { "headers": headers_dict, "body": None }
+        signature = self.get_hash_sha256(**hmac_dict)
+
+        # Add HMAC to request header parameters
+        headers_dict["signature"] = signature
+
+        # set common settings in request header parameters
+        headers_dict["Content-Type"] = 'application/json; charset=utf-8'
+        headers_dict["Accept"] = 'application/json'
+
+        # Do send a call
+        res_obj = self.send_request(send_method="POST", _api_post_url=post_url, req_input=input_data_dict)
+
+        return res_obj
